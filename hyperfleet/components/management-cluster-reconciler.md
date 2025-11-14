@@ -1,7 +1,11 @@
-# Goal
-The goal is to ensure reliable hosted cluster provisioning that meets our 10-minute SLO while optimizing resource efficiency. Specifically, we need to:
+# Management Cluster Reconciler
 
-1. **Guarantee SLO Performance:** Always have sufficient management cluster capacity available to provision hosted clusters within 10 minutes
+> **Note**: Despite the name, this implements a predictive agent pattern, not a traditional Kubernetes reconciler pattern.
+
+# Goal
+The goal is to ensure reliable hosted cluster provisioning that meets our hosted cluster provisioning SLO while optimizing resource efficiency. Specifically, we need to:
+
+1. **Guarantee SLO Performance:** Always have sufficient management cluster capacity available to provision hosted clusters within the SLO
 2. **Optimize Resource Efficiency:** Minimize over-provisioning and waste by maintaining "just enough" capacity ahead of demand
 
 The agent must balance these competing objectives - never compromising the SLO for cost savings, but also avoiding wasteful over-provisioning when demand patterns are predictable.
@@ -13,16 +17,21 @@ In Red Hat managed services space, we use the word management cluster interchang
 Each management cluster has a finite capacity for hosted control planes, determined by both resource constraints (CPU, memory) and infrastructure limitations (VPC limits, network capacity, etc.). When we approach this capacity limit, we need to create a new management cluster. Creating this management cluster takes time. Therefore we need to be ready in advance - just in time though to avoid wasting of resources.
 
 ## SLO Constraints
-- **Hosted cluster provisioning SLO:** 10 minutes (hard requirement - cannot be broken)
-- **Management cluster provisioning time:** 40-60 minutes (the core challenge)
-- **Risk:** If no management cluster capacity is available, we cannot meet the 10-minute SLO
+- **Hosted cluster provisioning SLO:** Minutes (hard requirement - cannot be broken)
+- **Management cluster provisioning time:** 40-60 minutes (orders of magnitude longer)
+- **Risk:** If no management cluster capacity is available, we cannot meet the SLO
+
+### Core Problem
+1. **Timing mismatch exists** (SLO << provisioning time)
+2. **No capacity = guaranteed SLO miss**
+3. **Need predictive provisioning to bridge the gap**
 
 ## Optimization Objectives
 The agent operates with a clear hierarchy of objectives:
-1. **Primary - SLO Guarantee:** Never miss the 10-minute hosted cluster SLO (non-negotiable)
+1. **Primary - SLO Guarantee:** Never miss the hosted cluster provisioning SLO (non-negotiable)
 2. **Secondary - Cost Optimization:** Within SLO constraints, minimize over-provisioning and resource waste
 
-Cost optimization is always **subordinate to** SLO performance - the agent will never compromise the 10-minute SLO for cost savings, but will optimize efficiency when demand patterns allow predictable provisioning.
+Cost optimization is always **subordinate to** SLO performance - the agent will never compromise the hosted cluster provisioning SLO for cost savings, but will optimize efficiency when demand patterns allow predictable provisioning.
 
 Different optimization strategies may be applied based on:
 - Customer tier (premium customers prioritize performance)
@@ -34,7 +43,7 @@ Different optimization strategies may be applied based on:
 
 ### Core Problem: Timing Mismatch
 The fundamental challenge is a timing mismatch between demand and supply:
-- **Hosted cluster provisioning:** 10-minute SLO (customer-facing)
+- **Hosted cluster provisioning:** Minutes SLO (customer-facing)
 - **Management cluster provisioning:** 40-60 minutes (as a ballpark; there are infrastructure constraint)
 
 ### Solution Approach: Predictive Feed-Forward Control
@@ -44,25 +53,7 @@ Rather than wait for capacity depletion and react (feedback control), we are **p
 2. **Predicting future capacity needs** based on historical patterns and trends
 3. **Triggering management cluster creation** proactively, 60-90 minutes ahead of predicted need
 
-This is analogous to industrial process control where you compensate for known disturbances before they impact the process variable.
 
-### Implementation Approach: Control Systems Commissioning
-
-**Phase 1: Basic Control Loop Commissioning**
-- Establish basic threshold-based control (e.g., provision when approaching capacity limit)
-- Validate integration points and provide immediate SLO protection
-- **Learn actual system characteristics** through operational experience
-- Tune control parameters based on real performance data
-
-**Phase 1 Sub-phases (Based on Operational Learning):**
-- **Phase 1a: Threshold Tuning** - Adjust trigger points (90% → 85%) based on SLO performance
-- **Phase 1b: Actuator Optimization** - Tune cluster sizing and provisioning parameters
-
-**Future Control Strategies (Subject to Phase 1 Learning):**
-- **Time Series Prediction**: If demand patterns prove sufficiently predictable
-- **Multi-Dimensional Optimization**: If resource constraints become the primary limitation
-- **Adaptive Control**: If system characteristics change significantly over time
-- **Other approaches**: To be determined based on operational experience and system behavior
 
 ### Data-Driven Decision Making
 The agent will make provisioning decisions based on:
@@ -73,262 +64,191 @@ The agent will make provisioning decisions based on:
 4. **Context Awareness:** Customer tiers, regional patterns, and time-of-day variations
 
 ### Success Metrics
-- **Primary:** Zero missed 10-minute hosted cluster SLOs
+- **Primary:** Zero missed hosted cluster provisioning SLOs
 - **Operational:** Prediction accuracy, provisioning success rate, reduced emergency interventions
 - **Secondary:** Minimize unused management cluster capacity (cost optimization)
 
-## Concrete Example: Control Systems Commissioning Approach
+## Trade-offs
 
-**Scenario: "Monday Morning Spike"**
-- **Observed pattern:** Every Monday at 9 AM, 15 new hosted clusters are typically requested (customer onboarding pattern)
-- **Current state:** us-east-1 management cluster at 85% capacity (can handle ~3 more hosted clusters)
-- **Timeline:** It's Sunday 11 PM (10 hours before expected spike)
+### What We Gain
+- ✅ Proactive capacity management prevents SLO violations
+- ✅ Predictive approach reduces emergency interventions
 
-### Phase 1: Initial Control Loop Commissioning
-**Initial Settings:** Threshold = 90% capacity
-```
-Current: 85% capacity
-Threshold: 90% capacity
-Action: Wait until threshold is hit, then provision new cluster
-```
-**Timeline:**
-- Sunday 11 PM: No action (below 90% threshold)
-- Monday 9 AM: Spike begins, hits 90% threshold quickly
-- Monday 9:05 AM: Provision request triggered
-- Monday 10:05 AM: New cluster ready (60min later)
-**Result:** ⚠️ Some Monday morning requests face delays
+### What We Lose / What Gets Harder
+- ❌ System complexity increases with prediction logic
+- ❌ More failure modes to handle vs simple reactive scaling
+- ⚠️ Risk of over-provisioning when predictions are wrong
 
-### Phase 1a: Threshold Tuning (Based on Monday's Performance)
-**Learning:** 90% threshold caused SLO violations
-**Adjustment:** Lower threshold to 85%
-```
-Next Week Scenario:
-Sunday 11 PM: Now at 85% threshold - triggers provisioning immediately
-Monday 12 AM: New cluster ready (60min later)
-Monday 9 AM: Spike arrives, sufficient capacity available
-```
-**Result:** ✅ SLO met through parameter tuning
+## Implementation Progression
 
-### Phase 1b: Actuator Optimization (After Several Weeks of Data)
-**Learning:** Standard cluster size sometimes over/under provisions
-**Adjustment:** Optimize cluster sizing based on actual demand patterns
+### Phase 0: Baby Step (Implement Now)
+**Objective:** Basic capacity protection with zero historical data required
+
+**The Flow:**
 ```
-Demand Analysis: Monday spikes average 12-18 clusters
-Sizing Decision: Provision larger clusters (25 capacity) vs standard (15 capacity)
-Trade-off: Less frequent provisioning vs potential over-provisioning
+New hosted cluster request arrives
+    ↓
+1. Check current capacity 
+    ↓
+2. Pick EXISTING management cluster for placement (return immediately)
+    ↓
+3. If threshold crossed → trigger NEW management cluster provisioning (async)
 ```
 
-### Future Control Strategies (Subject to Operational Learning)
-**If Pattern Recognition Proves Reliable:**
-- **Time Series Prediction**: Proactive Sunday 11 PM provisioning based on Monday pattern detection
-- **Multi-Dimensional**: Resource-aware sizing and placement optimization
+**Key Points:**
+- **Placement = EXISTING clusters**: Return best available management cluster immediately
+- **Provisioning = FUTURE capacity**: Async trigger for 40-60 minute provisioning cycle
+- **No waiting**: Current request served immediately with existing capacity
 
-**Key Control Systems Principle:**
-Commission basic control first → Tune parameters based on real performance → Add sophistication only after understanding system behavior
+**Implementation:**
+- Fixed 90% utilization threshold
+- Simple "highest available capacity" placement logic
+- Event-driven on each hosted cluster request
 
-## Implementation Strategy: Control Systems Commissioning
+**Example:**
+```
+Request arrives for us-east-1
+Current state: mgmt-cluster-A (60%), mgmt-cluster-B (91%)
 
-### Phase 1: Basic Control Loop Implementation
-**Objective:** Commission fundamental capacity control with parameter tuning
+Immediate: "Place on mgmt-cluster-A" (60% utilization)
+Async: "mgmt-cluster-B at 91% → trigger provisioning"
 
-**Initial Implementation:**
-- Static threshold-based provisioning (start with 90% capacity trigger)
-- Validate all integration points (CLM, Tekton, ACM, Observability)
-- Establish monitoring and data collection foundation
-
-**Phase 1a: Threshold Tuning**
-- **Trigger:** Based on SLO performance analysis
-- **Adjustments:** Modify threshold percentage (90% → 85% → 80% as needed)
-- **Learning:** Understand system time constants and response characteristics
-
-**Phase 1b: Actuator Optimization**
-- **Trigger:** After collecting demand pattern data (4-8 weeks)
-- **Adjustments:** Optimize cluster sizing, provisioning timing, regional distribution
-- **Learning:** Understand capacity utilization patterns and cost trade-offs
+Result: Current request handled + future capacity protected
+```
 
 **Success Criteria:**
-- Zero missed 10-minute hosted cluster SLOs
+- Zero missed hosted cluster provisioning SLOs
 - Successful automated provisioning pipeline
-- Baseline telemetry and operational metrics established
-- Tuned parameters based on real system behavior
+- Baseline telemetry collection established
 
-**Configuration Evolution:**
-```yaml
-# Initial
-agent:
-  mode: "static"
-  thresholdPercent: 90
+### Phase 1: Data-Driven Tuning (After 2-8 Weeks Operation)
+**Prerequisites:** Operational experience and performance data from Phase 0
 
-# After tuning
-agent:
-  mode: "static"
-  thresholdPercent: 85  # Tuned based on SLO performance
-  clusterSize: "large"  # Tuned based on demand patterns
-```
+**Phase 1a: Threshold Tuning** (Weeks 2-4)
+- **Data Needed:** SLO violation patterns, utilization trends
+- **Human Action:** Manually adjust threshold (90% → 85% → 87%)
+- **Learning:** Optimal trigger point for your specific environment
 
-### Future Control Strategies (Subject to Phase 1 Learning)
+**Phase 1b: Actuator Optimization** (Weeks 4-8)
+- **Data Needed:** Demand patterns, cluster sizing effectiveness
+- **Human Action:** Optimize cluster size, provisioning quantity, regional distribution
+- **Learning:** Right-sized provisioning response per region/pattern
 
-**Time Series Prediction** (If demand proves predictable)
-- Prerequisites: Proven patterns in Phase 1 data, reliable demand forecasting
-- Approach: Proactive provisioning based on historical pattern recognition
-- Risk: Requires sufficient data to be collected before we can see thru the noise
+### Phase 2+: Advanced Features (After Months of Data)
+**Prerequisites:** Long-term performance trends and deep system understanding
 
-**Multi-Dimensional Optimization** (If resource constraints dominate)
-- Prerequisites: Understanding of resource bottlenecks from Phase 1
-- Approach: Resource-aware capacity decisions beyond simple counting
-- Risk: Added complexity without proven simple control foundation
+**Cannot be designed upfront** - depends entirely on Phase 1 learnings:
 
-**Adaptive Control** (If system characteristics change)
-- Prerequisites: Demonstrated need for dynamic parameter adjustment
-- Approach: Self-tuning thresholds based on system performance
-- Risk: Control instability without deep system understanding
+**Potential Evolution Paths:**
+- **Adaptive Control**: If manual tuning shows clear patterns → automate threshold adjustment
+- **Multi-Dimensional**: If resource constraints (not just count) become bottlenecks
+- **Time Series Prediction**: If demand shows reliable seasonal/weekly patterns
+- **Cost Optimization**: If over-provisioning becomes significant waste
 
-## Risk Mitigation
+**Key Principle:** **"You can't design Phase 2 without Phase 1 operational data"**
 
-### Failure Scenarios by Phase
+**Decision Timeline:**
+- **Phase 0**: Implement immediately (no data needed)
+- **Phase 1**: Plan after 2 weeks of Phase 0 operation
+- **Phase 2+**: Design after 3+ months of production experience
 
-#### Phase 1: Static Threshold Failures
+## Dependencies
 
-**1. Configuration/State Loss**
-```
-Monday Spike Scenario:
-Sunday 11 PM: Agent at 85% capacity, threshold=90%
-Failure: PV corruption, lose threshold configuration
-Fallback: Restart with conservative default (threshold=80%)
-Result: Triggers provisioning immediately Sunday 11 PM
-Outcome: Over-provisions but guarantees Monday spike capacity
-```
-
-#### Phase 2+: Prediction-Based Failures
-
-**2. Prediction Error**
-```
-Monday Spike Scenario:
-Sunday 11 PM: Predict 5 clusters Monday morning based on historical pattern
-Monday 9 AM: Actually get 25 clusters (unexpected customer onboarding)
-Fallback: Static threshold (90%) still triggers when capacity hit Monday 9:15 AM
-Result: Some Monday requests face delays, but prevents total failure
-```
-
-**3. Historical Data Loss**
-```
-Monday Spike Scenario:
-Sunday 10 PM: PV corruption, lose 3 months of prediction history
-Sunday 11 PM: Cannot make reliable Monday morning predictions
-Fallback: Revert to conservative static threshold (80% instead of 90%)
-Result: Triggers immediate provisioning Sunday 11 PM, over-provisions but safe
-```
-
-#### All Phases: Infrastructure Failures
-
-**4. Provisioning Pipeline Failure**
-```
-Monday Spike Scenario:
-Sunday 11 PM: Agent correctly triggers new cluster provisioning
-Reality: Tekton pipeline fails (cloud quota limits, network issues)
-Fallback: Emergency capacity borrowing from us-west-2 region
-Result: Monday spike handled with slightly higher latency
-```
-
-**5. Integration Failure**
-```
-Monday Spike Scenario:
-Sunday 11 PM: Agent decides new cluster needed for Monday spike
-Reality: ACM APIs down, cannot trigger provisioning automatically
-Fallback: Manual override capabilities and alerting - page operations team immediately
-Result: Manual cluster creation, agent resumes when integration restored
-```
-
-#### Key Principle
-Each failure mode has a **safer fallback** - we'd rather over-provision than miss SLOs. The agent degrades gracefully through layers: Advanced features → Prediction → Static threshold → Manual intervention.
-
-### Monitoring and Alerting
-- Management cluster capacity warnings (< 20% available)
-- SLO violation alerts (10-minute hosted cluster creation)
-
-## High-Level System Design
-
-The Management Cluster Agent is a stateful microservice that makes both provisioning and placement decisions based on real-time data and predictive analytics.
-
-### System Architecture
+### Physical Deployment Context
+The Management Cluster Reconciler runs on the **Regional Cluster** alongside other cluster management components, providing tight integration and efficient communication.
 
 ```mermaid
 graph TB
-    %% External Systems - Inputs
-    CLM[CLM-Broker<br/>Hosted Cluster Requests]
-    TEK_IN[Tekton Pipeline<br/>Management Cluster Ready Events]
-    ACM[ACM Search MCP Server<br/>Cluster State]
-    OBS[Observability Systems<br/>Metrics & Resource Data]
-
-    %% Core Agent System
-    subgraph "Management Cluster Agent"
-        API[REST API<br/>Input Handler]
-        PRED[Prediction Engine<br/>Decision Engine<br/>Provisioning & Placement Logic]
-        STATE[(PV<br/>Storing State)]
+    subgraph "Regional Cluster"
+        ACM_HUB[ACM Hub<br/>with Search APIs]
+        CLM[CLM<br/>Cluster Lifecycle Management]
+        CLM_BROKER[CLM Broker<br/>Kafka/MQ/gRPC]
+        RECONCILER[Management Cluster<br/>Reconciler]
+        OBS[Observability APIs<br/>Non-ACM Metrics]
+        PV[(Storage<br/>Storing State)]
     end
 
-    %% External Systems - Outputs
-    TEK_OUT[Tekton Pipeline<br/>Provision Management Cluster]
+    subgraph "Management Clusters"
+        MC1[Management Cluster 1<br/>ACM HyperShift Addon]
+        MC2[Management Cluster 2<br/>ACM HyperShift Addon]
+        MC3[Management Cluster N<br/>ACM HyperShift Addon]
+    end
 
-    %% Data Flow - Inputs
-    CLM -->|Hosted cluster request| API
-    TEK_IN -->|Cluster ready notification| PRED
-    ACM -->|Current state| PRED
-    OBS -->|Resource metrics| PRED
+    subgraph "Our Infrastructure"
+        TEKTON[Tekton Pipelines<br/>Management Cluster<br/>Provisioning]
+    end
 
-    %% Internal Flow
-    API --> PRED
-    PRED <--> STATE
+    subgraph "External Systems"
+        CLOUD[Cloud Provider APIs<br/>Regional Capacity Limits]
+    end
 
-    %% Data Flow - Outputs
-    PRED -->|Provision signal| TEK_OUT
-    API -->|Placement decision| CLM
+    %% Data Flow - Regional Cluster Internal
+    CLM -->|Publish hosted cluster requests| CLM_BROKER
+    CLM -->|hosted cluster creation request| RECONCILER
+    RECONCILER -->|Placement decisions| CLM
+    RECONCILER <-->|Historical data| PV
+    CLM_BROKER -.-> RECONCILER
+    RECONCILER -->|Query cluster state,count| ACM_HUB
+    RECONCILER -->|Resource metrics| OBS
+    ACM_HUB -->|Manage| MC1
+    ACM_HUB -->|Manage| MC2
+    ACM_HUB -->|Manage| MC3
+
+    %% External Integration
+    RECONCILER -->|Trigger provisioning| TEKTON
+    TEKTON -->|Cluster ready notifications| RECONCILER
+    TEKTON -->|Create new cluster| MC1
+    TEKTON -->|Check quotas/provision| CLOUD
 
     %% Styling
-    classDef input fill:#e1f5fe
-    classDef agent fill:#f3e5f5
-    classDef output fill:#e8f5e8
-    classDef storage fill:#fff3e0
+    classDef regionalCluster fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef managementCluster fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef ourInfra fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef external fill:#ffebee,stroke:#d32f2f,stroke-width:2px
+    classDef storage fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 
-    class CLM,TEK_IN,ACM,OBS input
-    class API,PRED agent
-    class TEK_OUT output
-    class STATE storage
+    class ACM_HUB,CLM,CLM_BROKER,RECONCILER,OBS regionalCluster
+    class MC1,MC2,MC3 managementCluster
+    class TEKTON ourInfra
+    class CLOUD external
+    class PV storage
 ```
 
-### Data Flow Description
+### Co-located Dependencies (Regional Cluster)
+- **ACM Hub**: Cluster management, ManagedCluster CRs, and search APIs
+- **CLM**: Hosted cluster lifecycle management
+- **CLM Broker - Optional**: Event streaming for hosted cluster requests (Kafka/MQ/gRPC). For analytics for Phase 1.
+- **ACM Search APIs**: Quantity of hosted clusters and state of management clusters
+- **Observability APIs**: Resource utilization metrics (non-ACM APIs)
+- **Storage**: Storing state. Phase 0 will not use state. Type of storage will need prototyping (DB, file systems, Object Store, Prometheus, configmaps etc). 
 
-#### Input Sources
-1. **CLM-Broker**: Real-time hosted cluster creation requests
-2. **Tekton Pipeline**: Notifications when new management clusters are ready
-3. **ACM Search MCP Server**: Current cluster capacity, state, and resource utilization
-4. **Observability Systems**: Resource metrics (CPU, memory, network, disk)
+### Our Infrastructure Dependencies
+- **Tekton Pipelines**: Management cluster provisioning automation (owned by us, separate infrastructure)
+- **Management Clusters**: Target clusters running ACM HyperShift Addon
 
-#### Core Processing
-- **Prediction Engine**: Combines demand forecasting, capacity prediction, and provisioning/placement decision logic
-- **PV Storage**: Historical data and current state persistence
+### Configuration Dependencies
+- **Regional capacity limits**: Provided via configuration from CLM (sourced from cloud provider quotas)
 
-#### Output Actions
-1. **Provisioning Signal**: Triggers Tekton pipeline to create new management clusters
-2. **Placement Decision**: Returns target management cluster to CLM-Broker for hosted cluster placement
 
-### Key Decision Points
+## Example: Monday Morning Spike Pattern
 
-**Provisioning Decision Flow:**
+**Scenario:** Monday 9 AM with 8 hosted cluster requests (manageable spike)
+
+**Phase 0 Response:**
 ```
-Hosted Cluster Request → Capacity Check → Prediction Analysis → Provision if Needed
+Monday 8:59 AM: us-east-1 clusters at 75%, 80%, 85% utilization
+Monday 9:00 AM: First 3 requests → placed on least loaded → 76%, 81%, 86%
+Monday 9:01 AM: Next 2 requests → placed on least loaded → 77%, 82%, 86%
+Monday 9:02 AM: Next 3 requests → placed on least loaded → 82%, 87%, 91%
+Monday 9:02 AM: 91% > 90% threshold → trigger provisioning (async)
+Monday 10:02 AM: New management cluster ready (60 minutes)
 ```
 
-**Placement Decision Flow:**
-```
-Available Clusters → Resource Analysis → Load Balancing → Return Best Target
-```
+**Result:** All requests handled immediately with existing capacity.
 
-### Agent Responsibilities
-- **Capacity Management**: Ensure sufficient management cluster capacity
-- **Intelligent Placement**: Route hosted clusters to optimal management clusters
-- **Predictive Provisioning**: Proactively create capacity before demand spikes
-- **State Management**: Maintain historical data and prediction accuracy
+**Note:** If significantly more requests arrived (10+), we'd hit ~95% utilization limits and some requests would need to wait. Whether this happens depends on actual demand patterns - we need operational data before engineering solutions for this scenario.
+
+
 
 ## Security
 
@@ -353,8 +273,8 @@ Available Clusters → Resource Analysis → Load Balancing → Return Best Targ
 ## Resiliency
 
 ### High Availability
-- **Multi-Replica Deployment**: Run multiple agent instances
-- **Persistent Storage**: Replicated persistent volumes for state data across availability zones
+- **Multi-Replica Deployment**: Run multiple agent instances with simple leader election.
+- **Persistent Storage**: Replicated persistent volumes for state data across availability zones. Not an issue for Phase 0.
 - **Graceful Degradation**: Fallback to conservative thresholds when advanced features fail
 - **Health Checks**: Comprehensive liveness and readiness probes for automatic recovery
 
