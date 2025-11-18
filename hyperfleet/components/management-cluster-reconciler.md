@@ -5,7 +5,7 @@
 # Goal
 The goal is to ensure reliable hosted cluster provisioning that meets our hosted cluster provisioning SLO while optimizing resource efficiency. Specifically, we need to:
 
-1. **Guarantee SLO Performance:** Always have sufficient management cluster capacity available to provision hosted clusters within the SLO
+1. **Not Impact SLO Performance:** Always have sufficient management cluster capacity available to provision hosted clusters within the SLO
 2. **Optimize Resource Efficiency:** Minimize over-provisioning and waste by maintaining "just enough" capacity ahead of demand
 
 The agent must balance these competing objectives - never compromising the SLO for cost savings, but also avoiding wasteful over-provisioning when demand patterns are predictable.
@@ -85,15 +85,18 @@ The agent will make provisioning decisions based on:
 **Objective:** Basic capacity protection with zero historical data required
 
 **The Flow:**
-```
-New hosted cluster request arrives
-    ↓
-1. Check current capacity 
-    ↓
-2. Pick EXISTING management cluster for placement (return immediately)
-    ↓
-3. If threshold crossed → trigger NEW management cluster provisioning (async)
-```
+ - Placement Flow
+    ```
+    New hosted cluster placement call
+        ↓
+    1. Check current capacity 
+        ↓
+    2. Pick EXISTING management cluster for placement (return immediately)
+    ```   
+ - Background Flow:
+    ```
+    If threshold crossed → trigger NEW management cluster provisioning (async)
+    ```
 
 **Key Points:**
 - **Placement = EXISTING clusters**: Return best available management cluster immediately
@@ -164,8 +167,7 @@ graph TB
         CLM[CLM<br/>Cluster Lifecycle Management]
         CLM_BROKER[CLM Broker<br/>Kafka/MQ/gRPC]
         RECONCILER[Management Cluster<br/>Reconciler]
-        OBS[Observability APIs<br/>Non-ACM Metrics]
-        PV[(Storage<br/>Storing State)]
+
     end
 
     subgraph "Management Clusters"
@@ -186,10 +188,8 @@ graph TB
     CLM -->|Publish hosted cluster requests| CLM_BROKER
     CLM -->|hosted cluster creation request| RECONCILER
     RECONCILER -->|Placement decisions| CLM
-    RECONCILER <-->|Historical data| PV
     CLM_BROKER -.-> RECONCILER
     RECONCILER -->|Query cluster state,count| ACM_HUB
-    RECONCILER -->|Resource metrics| OBS
     ACM_HUB -->|Manage| MC1
     ACM_HUB -->|Manage| MC2
     ACM_HUB -->|Manage| MC3
@@ -216,15 +216,9 @@ graph TB
 
 ### Co-located Dependencies (Regional Cluster)
 - **ACM Hub**: Cluster management, ManagedCluster CRs, and search APIs
-- **CLM**: Hosted cluster lifecycle management
-- **CLM Broker - Optional**: Event streaming for hosted cluster requests (Kafka/MQ/gRPC). For analytics for Phase 1.
 - **ACM Search APIs**: Quantity of hosted clusters and state of management clusters
-- **Observability APIs**: Resource utilization metrics (non-ACM APIs)
-- **Storage**: Storing state. Phase 0 will not use state. Type of storage will need prototyping (DB, file systems, Object Store, Prometheus, configmaps etc). 
-
-### Our Infrastructure Dependencies
 - **Tekton Pipelines**: Management cluster provisioning automation (owned by us, separate infrastructure)
-- **Management Clusters**: Target clusters running ACM HyperShift Addon
+
 
 ### Configuration Dependencies
 - **Regional capacity limits**: Provided via configuration from CLM (sourced from cloud provider quotas)
@@ -253,45 +247,30 @@ Monday 10:02 AM: New management cluster ready (60 minutes)
 ## Security
 
 ### Access Control
-- **Service Account**: Dedicated Kubernetes ServiceAccount with minimal required permissions
-- **RBAC**: Least-privilege access to ACM APIs, Tekton resources, and observability data
-- **API Authentication**: Secure authentication for CLM-Broker requests and external integrations
+- **Service Account**: Dedicated Kubernetes ServiceAccount with minimal required permissions for Management Cluster Reconciler
+- **API Authentication**: Secure authentication for CLM requests and external integrations
 - **Network Policies**: Restrict network access to required services only
 
-### Data Protection
-- **State Encryption**: Persistent volume encryption at rest for historical data and predictions
-- **Transit Security**: TLS encryption for all API communications and data collection
-- **Secrets Management**: Kubernetes secrets to be rotated regularly
-- **Audit Logging**: Complete audit trail of provisioning decisions and capacity changes
 
 ### Threat Mitigation
 - **Identity Validation**: Do we implement SPIRE/SPIFFE ?
-- **Rate Limiting**: Protect against DoS attacks on provisioning and placement APIs
-- **Privilege Isolation**: Agent runs with non-root user and minimal container privileges
-- **Supply Chain**: Signed container images and dependency vulnerability scanning
+- **Rate Limiting**: Protect against DoS attacks on placement APIs
+
 
 ## Resiliency
 
 ### High Availability
 - **Multi-Replica Deployment**: Run multiple agent instances with simple leader election.
-- **Persistent Storage**: Replicated persistent volumes for state data across availability zones. Not an issue for Phase 0.
-- **Graceful Degradation**: Fallback to conservative thresholds when advanced features fail
 - **Health Checks**: Comprehensive liveness and readiness probes for automatic recovery
 
 ### Fault Tolerance
 - **Circuit Breakers**: Prevent cascade failures when external dependencies are unavailable
-- **Retry Logic**: Exponential backoff for transient failures in provisioning and data collection
+- **Retry Logic**: Exponential backoff for transient failures in lifecyle and data collection
 - **Timeout Handling**: Configurable timeouts for all external service calls
-- **Dead Letter Queues**: Capture and analyze failed provisioning requests for debugging
-
-### Disaster Recovery
-- **State Backup**: Regular backups of historical data and configuration to object storage
-- **Cross-Region Failover**: Ability to failover agent operations to backup regions
-- **Configuration as Code**: All agent configuration stored in version control for rapid rebuilds
-- **Recovery Testing**: Regular disaster recovery drills and failover validation
+- **Recovery from Pod Failures**: When the Reconciler initializes, it will always check with the Tekton pipeline to see the states of Management cluster lifecyle jobs. 
 
 ### Monitoring and Alerting
-- **Operational Metrics**: Agent health, prediction accuracy, provisioning success rates
+- **Operational Metrics**: Agent health, prediction accuracy
 - **Performance Monitoring**: Response times, resource utilization, and capacity trends
 - **Alert Generation**: Integration with existing incident management and paging systems
 
