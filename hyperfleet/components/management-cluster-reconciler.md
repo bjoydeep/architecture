@@ -1,4 +1,6 @@
 # Management Cluster Reconciler
+## Design Document 
+for [HYPERFLEET-153](https://issues.redhat.com/browse/HYPERFLEET-153)
 
 > **Note**: Despite the name, this implements a predictive agent pattern, not a traditional Kubernetes reconciler pattern.
 
